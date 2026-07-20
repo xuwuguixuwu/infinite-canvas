@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>无限画布 Agent 转发器</title>
+        <link rel="stylesheet" href="popup.css" />
+    </head>
+    <body>
+        <main>
+            <div class="eyebrow">INFINITE CANVAS</div>
+            <h1>发送 Agent 内容</h1>
+            <p class="hint">在无限画布页面打开插件，然后选择发送范围。</p>
+
+            <fieldset>
+                <label><input type="radio" name="scope" value="full" checked /> 整个当前对话</label>
+                <label><input type="radio" name="scope" value="last" /> 最后一条 Agent 回复</label>
+            </fieldset>
+
+            <div class="actions">
+                <button type="button" data-target="chatgpt"><span class="mark chatgpt">C</span>发送到 ChatGPT</button>
+                <button type="button" data-target="gemini"><span class="mark gemini">G</span>发送到 Gemini</button>
+            </div>
+
+            <p id="status" role="status"></p>
+            <p class="privacy">内容只保存在浏览器扩展本地，发送成功后自动删除。</p>
+        </main>
+        <script src="popup.js"></script>
+    </body>
+</html>

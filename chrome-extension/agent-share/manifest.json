@@ -1,0 +1,40 @@
+{
+    "manifest_version": 3,
+    "name": "无限画布 Agent 转发器",
+    "description": "把无限画布 Agent 当前对话或生图任务一键发送到 ChatGPT / Gemini，并把生成图片回填画布。",
+    "version": "0.1.5",
+    "permissions": ["activeTab", "scripting", "storage", "tabs"],
+    "host_permissions": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*",
+        "https://xuwugui.com/agent/*",
+        "http://xuwugui.com/agent/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+    ],
+    "action": {
+        "default_title": "转发无限画布 Agent 对话",
+        "default_popup": "popup.html"
+    },
+    "background": {
+        "service_worker": "service-worker.js"
+    },
+    "content_scripts": [
+        {
+            "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+            "js": ["destination.js"],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": ["https://gemini.google.com/*"],
+            "js": ["destination.js"],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": ["https://xuwugui.com/agent/*", "http://xuwugui.com/agent/*", "http://localhost/*", "http://127.0.0.1/*"],
+            "js": ["canvas-bridge.js"],
+            "run_at": "document_idle"
+        }
+    ]
+}

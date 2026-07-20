@@ -1,4 +1,4 @@
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Bot, PanelRightClose } from "lucide-react";
 import { Button, Switch, Tooltip } from "antd";
 import { motion } from "motion/react";
@@ -9,6 +9,8 @@ import { CANVAS_AGENT_PANEL_MOTION_MS, useAgentStore } from "@/stores/use-agent-
 import { useThemeStore } from "@/stores/use-theme-store";
 
 const PANEL_MOTION_SECONDS = CANVAS_AGENT_PANEL_MOTION_MS / 1000;
+const AGENT_SHARE_REQUEST_EVENT = "infinite-canvas-agent-share-request";
+const AGENT_SHARE_RESPONSE_EVENT = "infinite-canvas-agent-share-response";
 
 export function AgentPanel() {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -21,6 +23,32 @@ export function AgentPanel() {
     const setAgentState = useAgentStore((state) => state.setAgentState);
     const closePanel = useAgentStore((state) => state.closePanel);
 
+    useEffect(() => {
+        const shareAgentContent = (event: Event) => {
+            const requestId = (event as CustomEvent<{ requestId?: string }>).detail?.requestId;
+            if (!requestId) return;
+            const state = useAgentStore.getState();
+            const messages = state.messages.filter((item) => (item.role === "user" || item.role === "assistant") && item.text.trim());
+            const fullConversation = messages.map((item) => `${item.role === "user" ? "用户" : "Agent"}：\n${item.text.trim()}`).join("\n\n");
+            const lastAnswer = [...messages].reverse().find((item) => item.role === "assistant")?.text.trim() || "";
+            document.dispatchEvent(
+                new CustomEvent(AGENT_SHARE_RESPONSE_EVENT, {
+                    detail: {
+                        requestId,
+                        payload: {
+                            title: state.canvasContext?.snapshot.title || "无限画布 Agent",
+                            threadId: state.activeThreadId,
+                            messageCount: messages.length,
+                            fullConversation,
+                            lastAnswer,
+                        },
+                    },
+                }),
+            );
+        };
+        document.addEventListener(AGENT_SHARE_REQUEST_EVENT, shareAgentContent);
+        return () => document.removeEventListener(AGENT_SHARE_REQUEST_EVENT, shareAgentContent);
+    }, []);
 
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();

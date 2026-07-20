@@ -7,7 +7,8 @@ import { saveAs } from "file-saver";
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
-import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { browserImageTarget, defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { requestBrowserImageGeneration } from "@/services/browser-image-bridge";
 import { uploadImage } from "@/services/image-storage";
 import { uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
@@ -1971,11 +1972,12 @@ function InfiniteCanvasPage() {
         setTitleEditing(false);
     }, [projectId, renameProject, titleDraft]);
 
-    const preventCanvasContextMenu = useCallback((event: ReactMouseEvent) => {
+    const handleCanvasContextMenu = useCallback((event: ReactMouseEvent) => {
         if ((event.target as HTMLElement).closest("[data-node-id]")) return;
         event.preventDefault();
-        setContextMenu(null);
-    }, []);
+        setNodeCreatePosition(null);
+        setContextMenu({ type: "canvas", x: event.clientX, y: event.clientY, position: screenToCanvas(event.clientX, event.clientY) });
+    }, [screenToCanvas]);
 
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
@@ -1985,6 +1987,7 @@ function InfiniteCanvasPage() {
                 openConfigDialog(true);
                 return;
             }
+            const browserTarget = browserImageTarget(generationConfig.model);
 
             // 插件节点声明了 useBuiltinPanel.writeBackToSelf:复用内置面板生成,但结果写回节点自身。
             // 目前支持 image 模式(全景等展示型节点),前缀由 useBuiltinPanel.promptPrefix 指定。
@@ -2007,9 +2010,11 @@ function InfiniteCanvasPage() {
                             ? [{ id: up.id, name: `${up.title || up.id}.png`, type: up.metadata.mimeType || "image/png", dataUrl: up.metadata.content, storageKey: up.metadata.storageKey }]
                             : [],
                     );
-                    const image = refs.length
-                        ? await requestEdit({ ...generationConfig, count: "1" }, fullPrompt, refs, undefined, { signal: controller.signal }).then((items) => items[0])
-                        : await requestGeneration({ ...generationConfig, count: "1" }, fullPrompt, { signal: controller.signal }).then((items) => items[0]);
+                    const image = browserTarget
+                        ? await requestBrowserImageGeneration({ target: browserTarget, prompt: fullPrompt, referenceImages: refs })
+                        : refs.length
+                          ? await requestEdit({ ...generationConfig, count: "1" }, fullPrompt, refs, undefined, { signal: controller.signal }).then((items) => items[0])
+                          : await requestGeneration({ ...generationConfig, count: "1" }, fullPrompt, { signal: controller.signal }).then((items) => items[0]);
                     const uploaded = await uploadImage(image.dataUrl);
                     setNodes((prev) =>
                         prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)),
@@ -2154,9 +2159,11 @@ function InfiniteCanvasPage() {
                     await Promise.all(
                         targetIds.map(async (targetId) => {
                             try {
-                                const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
+                                const image = browserTarget
+                                    ? await requestBrowserImageGeneration({ target: browserTarget, prompt: effectivePrompt, referenceImages })
+                                    : referenceImages.length
+                                      ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
+                                      : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl);
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 setNodes((prev) => {
@@ -2413,6 +2420,7 @@ function InfiniteCanvasPage() {
                 openConfigDialog(true);
                 return;
             }
+            const browserTarget = browserImageTarget(generationConfig.model);
 
             const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
             const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
@@ -2485,9 +2493,11 @@ function InfiniteCanvasPage() {
                     return;
                 }
 
-                const image = useReferenceImages
-                    ? await requestEdit(generationConfig, prompt, retryImages, undefined, { signal: controller.signal }).then((items) => items[0])
-                    : await requestGeneration(generationConfig, prompt, { signal: controller.signal }).then((items) => items[0]);
+                const image = browserTarget
+                    ? await requestBrowserImageGeneration({ target: browserTarget, prompt, referenceImages: retryImages })
+                    : useReferenceImages
+                      ? await requestEdit(generationConfig, prompt, retryImages, undefined, { signal: controller.signal }).then((items) => items[0])
+                      : await requestGeneration(generationConfig, prompt, { signal: controller.signal }).then((items) => items[0]);
                 const uploadedImage = await uploadImage(image.dataUrl);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                 const imageSize = fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
@@ -2746,7 +2756,7 @@ function InfiniteCanvasPage() {
                         setContextMenu(null);
                         setNodeCreatePosition(screenToCanvas(event.clientX, event.clientY));
                     }}
-                    onContextMenu={preventCanvasContextMenu}
+                    onContextMenu={handleCanvasContextMenu}
                     onDrop={handleDrop}
                 >
                     <svg className="absolute left-0 top-0 h-[10000px] w-[10000px] overflow-visible" style={{ pointerEvents: "none", transform: "translateZ(0)", zIndex: 0 }}>
@@ -2917,10 +2927,20 @@ function InfiniteCanvasPage() {
                             duplicateNode(contextMenu.nodeId);
                             setContextMenu(null);
                         }}
+                        onAddImage={() => {
+                            if (contextMenu.type !== "canvas") return;
+                            createNode(CanvasNodeType.Image, contextMenu.position);
+                            setContextMenu(null);
+                        }}
+                        onAddVideo={() => {
+                            if (contextMenu.type !== "canvas") return;
+                            createNode(CanvasNodeType.Video, contextMenu.position);
+                            setContextMenu(null);
+                        }}
                         onDelete={() => {
                             if (contextMenu.type === "node") {
                                 deleteNodes(new Set([contextMenu.nodeId]));
-                            } else {
+                            } else if (contextMenu.type === "connection") {
                                 deleteConnection(contextMenu.connectionId);
                             }
                             setContextMenu(null);

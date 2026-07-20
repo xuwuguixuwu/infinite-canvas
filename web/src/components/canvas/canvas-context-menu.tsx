@@ -1,12 +1,26 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { ImagePlus, Plus, Trash2, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ContextMenuState } from "@/types/canvas";
 
-export function CanvasNodeContextMenu({ menu, onClose, onDuplicate, onDelete }: { menu: ContextMenuState; onClose: () => void; onDuplicate: () => void; onDelete: () => void }) {
+export function CanvasNodeContextMenu({
+    menu,
+    onClose,
+    onDuplicate,
+    onDelete,
+    onAddImage,
+    onAddVideo,
+}: {
+    menu: ContextMenuState;
+    onClose: () => void;
+    onDuplicate: () => void;
+    onDelete: () => void;
+    onAddImage: () => void;
+    onAddVideo: () => void;
+}) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
 
     useEffect(() => {
@@ -25,8 +39,10 @@ export function CanvasNodeContextMenu({ menu, onClose, onDuplicate, onDelete }: 
             style={{ left: menu.x, top: menu.y, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
             onPointerDown={(event) => event.stopPropagation()}
         >
+            {menu.type === "canvas" ? <MenuButton icon={<ImagePlus className="size-4" />} label="添加图片生成器" onClick={onAddImage} /> : null}
+            {menu.type === "canvas" ? <MenuButton icon={<Video className="size-4" />} label="添加视频生成器" onClick={onAddVideo} /> : null}
             {menu.type === "node" ? <MenuButton icon={<Plus className="size-4" />} label="复制" onClick={onDuplicate} /> : null}
-            <MenuButton icon={<Trash2 className="size-4" />} label="删除" onClick={onDelete} danger />
+            {menu.type !== "canvas" ? <MenuButton icon={<Trash2 className="size-4" />} label="删除" onClick={onDelete} danger /> : null}
         </div>
     );
 }

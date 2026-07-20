@@ -62,6 +62,9 @@ export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+export const BROWSER_IMAGE_CHANNEL_ID = "browser";
+export const BROWSER_CHATGPT_IMAGE_MODEL = "chatgpt-image";
+export const BROWSER_GEMINI_IMAGE_MODEL = "gemini-image";
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -82,6 +85,17 @@ export const defaultConfig: AiConfig = {
                 { name: "gpt-4o-mini-tts", capability: "audio" },
             ],
         },
+        {
+            id: BROWSER_IMAGE_CHANNEL_ID,
+            name: "浏览器插件",
+            baseUrl: "browser-extension://agent-share",
+            apiKey: "browser",
+            apiFormat: "openai",
+            models: [
+                { name: BROWSER_CHATGPT_IMAGE_MODEL, capability: "image" },
+                { name: BROWSER_GEMINI_IMAGE_MODEL, capability: "image" },
+            ],
+        },
     ],
     model: "default::gpt-image-2",
     imageModel: "default::gpt-image-2",
@@ -97,7 +111,7 @@ export const defaultConfig: AiConfig = {
     videoGenerateAudio: "true",
     videoWatermark: "false",
     systemPrompt: "",
-    models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
+    models: ["default::gpt-image-2", "browser::chatgpt-image", "browser::gemini-image", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
     quality: "auto",
     size: "1:1",
     background: "",
@@ -168,6 +182,7 @@ export function resolveModelScript(config: AiConfig, value: string) {
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
+    if (isBrowserImageModel(model)) return true;
     const channel = resolveModelChannel(config, model);
     return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
 }
@@ -292,8 +307,23 @@ export function modelOptionName(value: string) {
 export function modelOptionLabel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     if (!decoded) return value;
+    if (decoded.channelId === BROWSER_IMAGE_CHANNEL_ID && decoded.model === BROWSER_CHATGPT_IMAGE_MODEL) return "ChatGPT Image（浏览器插件）";
+    if (decoded.channelId === BROWSER_IMAGE_CHANNEL_ID && decoded.model === BROWSER_GEMINI_IMAGE_MODEL) return "Gemini Image（浏览器插件）";
     const channel = config.channels.find((item) => item.id === decoded.channelId);
     return channel ? `${decoded.model}（${channel.name}）` : decoded.model;
+}
+
+export function isBrowserImageModel(value: string) {
+    const decoded = decodeChannelModel(value);
+    return decoded?.channelId === BROWSER_IMAGE_CHANNEL_ID && (decoded.model === BROWSER_CHATGPT_IMAGE_MODEL || decoded.model === BROWSER_GEMINI_IMAGE_MODEL);
+}
+
+export function browserImageTarget(value: string): "chatgpt" | "gemini" | null {
+    const decoded = decodeChannelModel(value);
+    if (decoded?.channelId !== BROWSER_IMAGE_CHANNEL_ID) return null;
+    if (decoded.model === BROWSER_CHATGPT_IMAGE_MODEL) return "chatgpt";
+    if (decoded.model === BROWSER_GEMINI_IMAGE_MODEL) return "gemini";
+    return null;
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {
@@ -351,6 +381,29 @@ function normalizeChannels(config: AiConfig) {
                 models: normalizeChannelModels([config.model, config.imageModel, config.videoModel, config.textModel, config.audioModel].map(modelOptionName)),
             }),
         );
+    }
+    const browserChannel = createModelChannel({
+        id: BROWSER_IMAGE_CHANNEL_ID,
+        name: "浏览器插件",
+        baseUrl: "browser-extension://agent-share",
+        apiKey: "browser",
+        apiFormat: "openai",
+        models: [
+            { name: BROWSER_CHATGPT_IMAGE_MODEL, capability: "image" },
+            { name: BROWSER_GEMINI_IMAGE_MODEL, capability: "image" },
+        ],
+    });
+    const existingBrowser = channels.find((channel) => channel.id === BROWSER_IMAGE_CHANNEL_ID);
+    if (existingBrowser) {
+        const modelNames = new Set(existingBrowser.models.map((model) => model.name));
+        browserChannel.models.forEach((model) => {
+            if (!modelNames.has(model.name)) existingBrowser.models.push(model);
+        });
+        existingBrowser.name = existingBrowser.name || browserChannel.name;
+        existingBrowser.baseUrl = browserChannel.baseUrl;
+        existingBrowser.apiKey = browserChannel.apiKey;
+    } else {
+        channels.push(browserChannel);
     }
     return channels;
 }
