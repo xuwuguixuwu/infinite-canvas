@@ -12,7 +12,10 @@ import NotFound from "@/pages/not-found";
 import PromptsPage from "@/pages/prompts";
 import VideoPage from "@/pages/video";
 
-export const router = createBrowserRouter([
+const routerBaseName = import.meta.env.BASE_URL.replace(/\/$/, "") || "/";
+
+export const router = createBrowserRouter(
+    [
     {
         element: (
             <UserLayout>
@@ -32,4 +35,6 @@ export const router = createBrowserRouter([
         ],
     },
     { path: "*", element: <NotFound /> },
-]);
+    ],
+    { basename: routerBaseName },
+);
