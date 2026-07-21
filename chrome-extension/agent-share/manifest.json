@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "无限画布 Agent 转发器",
     "description": "把无限画布 Agent 当前对话或生图任务一键发送到 ChatGPT / Gemini，并把生成图片回填画布。",
-    "version": "0.1.5",
+    "version": "0.1.7",
     "permissions": ["activeTab", "scripting", "storage", "tabs"],
     "host_permissions": [
         "https://chatgpt.com/*",

@@ -5,14 +5,19 @@ const expiresAfterMs = 15 * 60 * 1000;
 let filledShareId = "";
 let runningImageId = "";
 let attempts = 0;
+let manualButton;
+let manualButtonStatus;
+let manualButtonReady = false;
 
 const timer = window.setInterval(() => void tick(), 700);
+injectManualBackfillButton();
 void tick();
 
 async function tick() {
     if (++attempts > 1500) return window.clearInterval(timer);
     await deliverPendingShare();
     await deliverPendingImageGeneration();
+    await refreshManualBackfillButton();
 }
 
 async function deliverPendingShare() {
@@ -83,6 +88,109 @@ async function deliverPendingImageGeneration() {
     }
 }
 
+function injectManualBackfillButton() {
+    if (document.getElementById("dotai-manual-backfill")) return;
+    const style = document.createElement("style");
+    style.textContent = `
+        #dotai-manual-backfill {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 2147483647;
+            display: grid;
+            gap: 7px;
+            min-width: 150px;
+            padding: 12px 14px;
+            border: 1px solid rgba(139, 92, 246, 0.52);
+            border-radius: 18px;
+            background: rgba(16, 17, 24, 0.94);
+            color: #f7f4ff;
+            box-shadow: 0 18px 56px rgba(0, 0, 0, 0.36), 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+            font: 600 14px/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            cursor: pointer;
+            backdrop-filter: blur(16px);
+        }
+        #dotai-manual-backfill:hover {
+            border-color: rgba(167, 139, 250, 0.86);
+            box-shadow: 0 18px 56px rgba(0, 0, 0, 0.42), 0 0 22px rgba(139, 92, 246, 0.32);
+        }
+        #dotai-manual-backfill[aria-disabled="true"] {
+            cursor: not-allowed;
+            opacity: 0.52;
+        }
+        #dotai-manual-backfill strong {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+        #dotai-manual-backfill span {
+            color: #a7adbd;
+            font-size: 11px;
+            font-weight: 500;
+            max-width: 190px;
+        }
+    `;
+    document.documentElement.appendChild(style);
+
+    manualButton = document.createElement("button");
+    manualButton.id = "dotai-manual-backfill";
+    manualButton.type = "button";
+    manualButton.setAttribute("aria-disabled", "true");
+    manualButton.innerHTML = `<strong>↩ 回填到 DOT AI</strong><span>等待画布任务</span>`;
+    manualButtonStatus = manualButton.querySelector("span");
+    manualButton.addEventListener("click", () => void manualBackfillLatestImage());
+    document.documentElement.appendChild(manualButton);
+}
+
+async function refreshManualBackfillButton() {
+    if (!manualButton || !manualButtonStatus) return;
+    try {
+        const pending = await getPendingImageTask();
+        manualButtonReady = Boolean(pending?.requestId);
+        manualButton.setAttribute("aria-disabled", manualButtonReady ? "false" : "true");
+        manualButtonStatus.textContent = manualButtonReady ? "生成完成后点击" : "等待画布任务";
+    } catch {
+        manualButtonReady = false;
+        manualButton.setAttribute("aria-disabled", "true");
+        manualButtonStatus.textContent = "扩展需刷新";
+    }
+}
+
+async function manualBackfillLatestImage() {
+    if (!manualButton || !manualButtonStatus || !manualButtonReady) return;
+    try {
+        manualButton.disabled = true;
+        manualButtonStatus.textContent = "正在读取图片…";
+        const pending = await getPendingImageTask();
+        if (!pending?.requestId) throw new Error("没有找到待回填的 DOT AI 任务");
+        const image = findBestGeneratedImage();
+        if (!image) throw new Error("没找到 ChatGPT/Gemini 生成图，请等生成完成后再点");
+        const dataUrl = await imageToDataUrl(image);
+        await chrome.runtime.sendMessage({
+            type: "BROWSER_IMAGE_RESULT_FROM_TARGET",
+            target,
+            requestId: pending.requestId,
+            ok: true,
+            dataUrl,
+            mimeType: dataUrl.slice(5, dataUrl.indexOf(";")) || "image/png",
+        });
+        await chrome.storage.local.remove(imageStorageKey);
+        manualButtonStatus.textContent = "已发送回填";
+        manualButtonReady = false;
+        manualButton.setAttribute("aria-disabled", "true");
+    } catch (error) {
+        manualButtonStatus.textContent = error instanceof Error ? error.message : "回填失败";
+    } finally {
+        manualButton.disabled = false;
+    }
+}
+
+async function getPendingImageTask() {
+    return (await chrome.storage.local.get(imageStorageKey))[imageStorageKey];
+}
+
 function findComposer() {
     const selectors =
         target === "gemini"
@@ -118,21 +226,25 @@ function findAttachButton() {
 async function uploadReferenceImages(referenceImages) {
     const images = referenceImages.filter((image) => typeof image.dataUrl === "string" && image.dataUrl.startsWith("data:"));
     if (!images.length) return;
-    let input = findFileInput();
-    if (!input) {
-        const attachButton = findAttachButton();
-        attachButton?.click();
-        input = await waitFor(findFileInput, 10_000);
-    }
-
+    const beforeUpload = collectExistingImages();
     const dataTransfer = new DataTransfer();
     for (let index = 0; index < images.length; index += 1) {
         dataTransfer.items.add(await fileFromDataUrl(images[index], index));
     }
-    input.files = dataTransfer.files;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    await delay(2500);
+    const files = dataTransfer.files;
+
+    const strategies = [uploadViaFileInput, uploadViaPaste, uploadViaDrop];
+    for (const strategy of strategies) {
+        try {
+            await strategy(files);
+            await waitForReferenceUpload(beforeUpload, images.length, 12_000);
+            return;
+        } catch {
+            // 尝试下一种上传方式。
+        }
+    }
+
+    throw new Error("参考图没有上传到 ChatGPT/Gemini，已停止发送提示词。请升级插件或手动上传原图。");
 }
 
 async function fileFromDataUrl(image, index) {
@@ -141,6 +253,79 @@ async function fileFromDataUrl(image, index) {
     const type = image.type || blob.type || "image/png";
     const extension = type.includes("jpeg") ? "jpg" : type.includes("webp") ? "webp" : "png";
     return new File([blob], image.name || `reference-${index + 1}.${extension}`, { type });
+}
+
+async function uploadViaFileInput(files) {
+    let input = findFileInput();
+    if (!input) {
+        const attachButton = findAttachButton();
+        attachButton?.click();
+        input = await waitFor(findFileInput, 8_000);
+    }
+    if (!input) throw new Error("未找到图片上传 input");
+    try {
+        input.files = files;
+    } catch {
+        Object.defineProperty(input, "files", { value: files, configurable: true });
+    }
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await delay(1200);
+}
+
+async function uploadViaPaste(files) {
+    const composer = await waitFor(findComposer, 8_000);
+    const dataTransfer = new DataTransfer();
+    Array.from(files).forEach((file) => dataTransfer.items.add(file));
+    composer.focus();
+    const event = createDataTransferEvent("paste", dataTransfer, "clipboardData");
+    composer.dispatchEvent(event);
+    document.dispatchEvent(createDataTransferEvent("paste", dataTransfer, "clipboardData"));
+    await delay(1600);
+}
+
+async function uploadViaDrop(files) {
+    const composer = await waitFor(findComposer, 8_000);
+    const dataTransfer = new DataTransfer();
+    Array.from(files).forEach((file) => dataTransfer.items.add(file));
+    const rect = composer.getBoundingClientRect();
+    const options = {
+        clientX: rect.left + Math.max(10, rect.width / 2),
+        clientY: rect.top + Math.max(10, rect.height / 2),
+    };
+    composer.dispatchEvent(createDataTransferEvent("dragenter", dataTransfer, "dataTransfer", options));
+    composer.dispatchEvent(createDataTransferEvent("dragover", dataTransfer, "dataTransfer", options));
+    composer.dispatchEvent(createDataTransferEvent("drop", dataTransfer, "dataTransfer", options));
+    await delay(1600);
+}
+
+function createDataTransferEvent(type, dataTransfer, property, extra = {}) {
+    let event;
+    try {
+        const EventCtor = type === "paste" && typeof ClipboardEvent !== "undefined" ? ClipboardEvent : type.startsWith("drag") && typeof DragEvent !== "undefined" ? DragEvent : Event;
+        event = new EventCtor(type, { bubbles: true, cancelable: true, composed: true, ...extra, [property]: dataTransfer });
+    } catch {
+        event = new Event(type, { bubbles: true, cancelable: true, composed: true });
+    }
+    try {
+        Object.defineProperty(event, property, { value: dataTransfer, configurable: true });
+    } catch {
+        // 浏览器禁止改写时忽略。
+    }
+    return event;
+}
+
+async function waitForReferenceUpload(beforeUpload, expectedCount, timeoutMs) {
+    return waitFor(() => {
+        const uploaded = Array.from(document.images).filter((image) => {
+            if (beforeUpload.elements.has(image) || beforeUpload.keys.has(imageKey(image))) return false;
+            if (isInsideUserMessage(image)) return true;
+            if (isInsideComposerOrUserPrompt(image)) return true;
+            const rect = image.getBoundingClientRect();
+            return rect.width >= 40 && rect.height >= 40;
+        });
+        return uploaded.length >= Math.max(1, expectedCount) ? uploaded : null;
+    }, timeoutMs);
 }
 
 async function waitForGeneratedImage(seenImages, timeoutMs) {
@@ -152,6 +337,14 @@ async function waitForGeneratedImage(seenImages, timeoutMs) {
         const assistantCandidates = allCandidates.filter(isAssistantGeneratedImage);
         return assistantCandidates[0] || allCandidates[0] || null;
     }, timeoutMs);
+}
+
+function findBestGeneratedImage() {
+    const allCandidates = Array.from(document.images)
+        .filter(isLargeGeneratedCandidate)
+        .sort((a, b) => imageScore(b) - imageScore(a));
+    const assistantCandidates = allCandidates.filter(isAssistantGeneratedImage);
+    return assistantCandidates[0] || allCandidates[0] || null;
 }
 
 function collectExistingImages() {
